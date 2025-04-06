@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penn Station 3.5-Hour Travel Isochrone</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        
+        .controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        }
+        
+        .button-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        button {
+            padding: 8px 12px;
+            cursor: pointer;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: #e9ecef;
+        }
+        
+        button.active {
+            background: #3388ff;
+            color: white;
+            border-color: #3388ff;
+        }
+        
+        .legend {
+            margin-top: 20px;
+            font-size: 12px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            border-radius: 3px;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1001;
+            background: rgba(255,255,255,0.8);
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            display: none;
+        }
+        
+        .error-message {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1001;
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="controls">
+        <h3>3.5-Hour Isochrone</h3>
+        <div class="button-group">
+            <button id="drivingBtn" class="active">Driving</button>
+            <button id="publicTransportBtn">Train & Bus</button>
+            <button id="trainOnlyBtn">Train Only</button>
+        </div>
+        
+        <button id="addPinBtn">Add Lodging Pin</button>
+        
+        <div class="legend">
+            <h4>Legend</h4>
+            <div class="legend-item" id="isochroneLegendItem">
+                <div class="legend-color" id="isochroneLegendColor" style="background: rgba(51, 136, 255, 0.3); border: 2px solid #3388ff"></div>
+                <span id="isochroneLegendText">3.5-Hour Driving Radius</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff3333"></div>
+                <span>Lodging Options</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="loading" id="loadingIndicator">
+        Loading travel time data...
+    </div>
+    
+    <div class="error-message" id="errorMessage"></div>
+    
+    <!-- Pin Form Modal (hidden by default) -->
+    <div id="pinForm" style="display: none; position: absolute; z-index: 1002; background: white; padding: 20px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.2);">
+        <h3>Add Lodging Pin</h3>
+        <form id="newPinForm">
+            <div style="margin-bottom: 10px;">
+                <label for="pinName">Name:</label>
+                <input type="text" id="pinName" required style="width: 100%; padding: 5px; margin-top: 5px;">
+            </div>
+            <div style="margin-bottom: 10px;">
+                <label for="pinNotes">Notes:</label>
+                <textarea id="pinNotes" style="width: 100%; padding: 5px; margin-top: 5px;"></textarea>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <label for="pinUrl">URL:</label>
+                <input type="url" id="pinUrl" style="width: 100%; padding: 5px; margin-top: 5px;">
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 15px;">
+                <button type="button" id="cancelPin" style="background: #f8f9fa;">Cancel</button>
+                <button type="submit" style="background: #28a745; color: white;">Save Pin</button>
+            </div>
+        </form>
+    </div>
+    
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    
+    <script>
+        // Firebase configuration - Replace with your own Firebase config
+        const firebaseConfig = {
+            apiKey: "AIzaSyB8WLW6YV3VzjzopE1tO4ovTsVcrZHjB_s",
+            authDomain: "isochrone-map-290ea.firebaseapp.com",
+            databaseURL: "https://isochrone-map-290ea-default-rtdb.firebaseio.com",
+            projectId: "isochrone-map-290ea",
+            storageBucket: "isochrone-map-290ea.firebasestorage.app",
+            messagingSenderId: "419894147908",
+            appId: "1:419894147908:web:5b31989404646e1a8ef511",
+            measurementId: "G-L8Y16ZXLT4"
+        };
+        
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        
+        // TravelTime API credentials - Replace with your own credentials
+        // const travelTimeApiKey = "YOUR_TRAVELTIME_API_KEY"; // REMOVED
+        // const travelTimeAppId = "YOUR_TRAVELTIME_APP_ID"; // REMOVED
+
+        // Targomo API Key - Replace with your own key
+        // WARNING: Exposing API keys client-side is insecure for production.
+        // Consider using a backend proxy or serverless function.
+        const targomoApiKey = "X3GNTFUK6GFJVSNKIZLQ";
+        
+        // Penn Station coordinates
+        const pennStationCoords = {
+            lat: 40.7505,
+            lng: -73.9934
+        };
+        
+        // Initialize Leaflet map centered on Penn Station
+        const map = L.map('map').setView([pennStationCoords.lat, pennStationCoords.lng], 9);
+        
+        // Add OpenStreetMap tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        
+        // Mark Penn Station
+        L.marker([pennStationCoords.lat, pennStationCoords.lng])
+            .bindPopup("<b>Penn Station</b><br>Starting Point")
+            .addTo(map);
+        
+        // Variables to track current state
+        let currentMode = "driving";
+        let isochroneLayer = null;
+        let pinLayerGroup = L.layerGroup().addTo(map);
+        let isPinMode = false;
+        let tempPinMarker = null;
+        let tempPinLatLng = null;
+        
+        // DOM Elements
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const errorMessage = document.getElementById('errorMessage');
+        const pinForm = document.getElementById('pinForm');
+        const drivingBtn = document.getElementById('drivingBtn');
+        const publicTransportBtn = document.getElementById('publicTransportBtn');
+        const trainOnlyBtn = document.getElementById('trainOnlyBtn');
+        const addPinBtn = document.getElementById('addPinBtn');
+        const newPinForm = document.getElementById('newPinForm');
+        const cancelPinBtn = document.getElementById('cancelPin');
+        const isochroneLegendColor = document.getElementById('isochroneLegendColor');
+        const isochroneLegendText = document.getElementById('isochroneLegendText');
+        
+        // Event Listeners for transport mode buttons
+        drivingBtn.addEventListener('click', () => {
+            setActiveButton(drivingBtn);
+            currentMode = "driving";
+            fetchIsochrone(currentMode);
+        });
+        
+        publicTransportBtn.addEventListener('click', () => {
+            setActiveButton(publicTransportBtn);
+            currentMode = "transit";
+            fetchIsochrone(currentMode);
+        });
+        
+        trainOnlyBtn.addEventListener('click', () => {
+            setActiveButton(trainOnlyBtn);
+            currentMode = "transit";
+            fetchIsochrone(currentMode);
+        });
+        
+        // Set active button helper
+        function setActiveButton(activeButton) {
+            [drivingBtn, publicTransportBtn, trainOnlyBtn].forEach(btn => {
+                btn.classList.remove('active');
+            });
+            activeButton.classList.add('active');
+        }
+        
+        // Add Pin Button Event Listener
+        addPinBtn.addEventListener('click', () => {
+            if (!isPinMode) {
+                isPinMode = true;
+                addPinBtn.classList.add('active');
+                addPinBtn.textContent = 'Click on Map to Place Pin';
+                map.getContainer().style.cursor = 'crosshair';
+            } else {
+                cancelPinMode();
+            }
+        });
+        
+        // Cancel Pin Mode
+        function cancelPinMode() {
+            isPinMode = false;
+            addPinBtn.classList.remove('active');
+            addPinBtn.textContent = 'Add Lodging Pin';
+            map.getContainer().style.cursor = '';
+            
+            if (tempPinMarker) {
+                map.removeLayer(tempPinMarker);
+                tempPinMarker = null;
+            }
+            
+            pinForm.style.display = 'none';
+        }
+        
+        // Cancel Pin Button Event Listener
+        cancelPinBtn.addEventListener('click', cancelPinMode);
+        
+        // Map Click Event for Pin Placement
+        map.on('click', (e) => {
+            if (isPinMode) {
+                tempPinLatLng = e.latlng;
+                
+                // Remove any existing temporary pin
+                if (tempPinMarker) {
+                    map.removeLayer(tempPinMarker);
+                }
+                
+                // Add a new temporary pin
+                tempPinMarker = L.marker(tempPinLatLng).addTo(map);
+                
+                // Position and show the pin form
+                pinForm.style.left = `${e.containerPoint.x}px`;
+                pinForm.style.top = `${e.containerPoint.y}px`;
+                pinForm.style.display = 'block';
+                
+                // Focus the name field
+                document.getElementById('pinName').focus();
+            }
+        });
+        
+        // Pin Form Submission
+        newPinForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const pinName = document.getElementById('pinName').value;
+            const pinNotes = document.getElementById('pinNotes').value;
+            const pinUrl = document.getElementById('pinUrl').value;
+            
+            // Save the pin to Firebase
+            const newPinRef = database.ref('pins').push();
+            newPinRef.set({
+                lat: tempPinLatLng.lat,
+                lng: tempPinLatLng.lng,
+                name: pinName,
+                notes: pinNotes,
+                url: pinUrl,
+                createdAt: firebase.database.ServerValue.TIMESTAMP
+            });
+            
+            // Clean up the temporary pin
+            map.removeLayer(tempPinMarker);
+            tempPinMarker = null;
+            
+            // Reset the form
+            newPinForm.reset();
+            pinForm.style.display = 'none';
+            
+            // Exit pin mode
+            cancelPinMode();
+        });
+        
+        // Function to fetch isochrone from Targomo API
+        function fetchIsochrone(mode) {
+            showLoading(true);
+            hideError();
+            
+            // Map internal modes to Targomo modes ('driving' is kept internally, mapped here)
+            const targomoMode = mode === 'driving' ? 'car' : 'transit';
+            
+            // Prepare Targomo request body parts
+            const source = {
+                lat: pennStationCoords.lat,
+                lng: pennStationCoords.lng,
+                id: "penn_station",
+                tm: {} // Transport mode details added below
+            };
+            
+            const polygonOptions = {
+                serializer: "geojson",
+                srid: 4326, // Standard WGS84 lat/lng
+                values: [12600] // 3.5 hours in seconds
+            };
+            
+            // Add specific transport mode details
+            if (targomoMode === 'transit') {
+                // Get current date and time for transit frame
+                const now = new Date();
+                now.setHours(9, 0, 0); // Set departure to 9:00 AM
+                
+                const year = now.getFullYear();
+                const month = (now.getMonth() + 1).toString().padStart(2, '0'); // Month is 0-indexed
+                const day = now.getDate().toString().padStart(2, '0');
+                const transitFrameDate = `${year}${month}${day}`;
+                
+                const transitFrameTime = 9 * 60 * 60; // 9:00 AM in seconds past midnight
+                
+                source.tm = {
+                    "transit": {
+                        "transitFrameDate": transitFrameDate,
+                        "transitFrameTime": transitFrameTime
+                    }
+                };
+            } else { // Assumes 'car' mode otherwise
+                source.tm = { "car": {} };
+            }
+            
+            const requestBody = {
+                sources: [source],
+                polygon: polygonOptions
+            };
+            
+            // Targomo API endpoint for North America
+            const apiUrl = `https://api.targomo.com/northamerica/v1/polygon_post?key=${targomoApiKey}`;
+            
+            // Make the API request to Targomo
+            fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    // Throw specific errors based on Targomo status codes
+                    if (response.status === 400) {
+                        throw new Error(`API Error 400: Bad Request (Check coordinates/parameters)`);
+                    } else if (response.status === 401 || response.status === 403) {
+                         // Targomo usually uses key in URL, so 403 might indicate invalid key
+                        throw new Error(`API Error ${response.status}: Authentication Failed (Check API Key)`);
+                    } else if (response.status === 429) {
+                        throw new Error(`API Error 429: Rate Limit Exceeded`);
+                    } else if (response.status >= 500) {
+                         throw new Error(`API Error ${response.status}: Server Error`);
+                    }
+                    throw new Error(`HTTP error: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                // Targomo returns GeoJSON directly in the 'data' field
+                if (data && data.data && data.data.type === "FeatureCollection") {
+                     // Assuming the first feature contains the isochrone polygon geometry
+                    if (data.data.features && data.data.features.length > 0 && data.data.features[0].geometry) {
+                        const polygonGeoJson = data.data.features[0].geometry; 
+                        displayIsochrone(polygonGeoJson, targomoMode); // Pass targomoMode ('car' or 'transit')
+                        logApiCall(targomoMode, 12600); // Log with targomoMode
+                    } else {
+                        throw new Error("API Response Structure Error: No features or geometry found in GeoJSON.");
+                    }
+                } else {
+                    console.error("Unexpected API response structure:", data);
+                    throw new Error("Invalid API Response Structure");
+                }
+                showLoading(false);
+            })
+            .catch(err => {
+                console.error("API error details:", err);
+                let userMessage;
+                // Provide specific user messages based on caught error
+                if (err.message.includes("API Error 400")) {
+                    userMessage = "Map data request failed (Bad Request). Please check parameters or location.";
+                } else if (err.message.includes("API Error 401") || err.message.includes("API Error 403")) {
+                    userMessage = "Map data request failed (Authentication Error). Please check your Targomo API key.";
+                } else if (err.message.includes("API Error 429")) {
+                    userMessage = "Map data request failed (Rate Limit Exceeded). Please try again later.";
+                } else if (err.message.includes("API Error 5")) { // Catches 5xx errors
+                    userMessage = "Travel time service is temporarily unavailable. Please try again later.";
+                } else if (err.message.includes("Invalid API Response Structure") || err.message.includes("No features or geometry found")) {
+                    userMessage = "Could not process the travel time data. The format was unexpected or empty.";
+                } else if (err.message.includes("HTTP error")) {
+                    userMessage = `Could not load travel time data. Network request failed (${err.message}).`;
+                } else {
+                    // Generic fallback for network errors or other issues
+                    userMessage = "Could not load travel time data. Please check your connection and API key.";
+                }
+                showError(userMessage);
+                showLoading(false);
+                // Optionally remove the old isochrone layer on error
+                if (isochroneLayer) {
+                     map.removeLayer(isochroneLayer);
+                     isochroneLayer = null;
+                }
+            });
+        }
+        
+        // Function to display isochrone on the map
+        function displayIsochrone(geojsonPolygon, mode) { // Mode is now 'car' or 'transit'
+            // Remove the previous isochrone if it exists
+            if (isochroneLayer) {
+                map.removeLayer(isochroneLayer);
+            }
+            
+            // Define colors and labels based on Targomo mode
+            const modeDetails = {
+                "car": { color: "#3388ff", label: "Driving" },       // Mapped from 'driving'
+                "transit": { color: "#33cc33", label: "Transit" }     // Mapped from 'public_transport' / 'train'
+                // Note: Train-only is not distinct in Targomo, folded into 'transit'
+            };
+            
+            // Default to car if mode is unknown (shouldn't happen)
+            const selectedMode = modeDetails[mode] || modeDetails["car"]; 
+            const color = selectedMode.color;
+            const label = selectedMode.label; // Use the label from modeDetails ('Driving' or 'Transit')
+            
+            // Update legend
+            isochroneLegendColor.style.background = `${color}33`; // Add alpha for fill
+            isochroneLegendColor.style.borderColor = color;
+            isochroneLegendText.textContent = `3.5-Hour ${label} Radius`; // Use the mapped label
+            
+            // Create and style the new isochrone layer
+            isochroneLayer = L.geoJSON(geojsonPolygon, { // Pass the geometry directly
+                style: {
+                    color: color,
+                    weight: 2,
+                    opacity: 0.8,
+                    fillColor: color,
+                    fillOpacity: 0.3
+                }
+            }).addTo(map);
+            
+            // Update opacity based on current zoom
+            updateIsochroneOpacity();
+            
+            // Fit the map to the isochrone bounds
+            // Check if bounds are valid before fitting
+            const bounds = isochroneLayer.getBounds();
+            if (bounds.isValid()) {
+                map.fitBounds(bounds);
+            } else {
+                console.warn("Isochrone bounds are invalid, cannot fit map.");
+            }
+        }
+        
+        // Firebase listeners for collaborative pins
+        function initFirebasePinListeners() {
+            // Listen for new pins
+            database.ref('pins').on('child_added', (snapshot) => {
+                const pin = snapshot.val();
+                addPinToMap(snapshot.key, pin);
+            });
+            
+            // Listen for removed pins
+            database.ref('pins').on('child_removed', (snapshot) => {
+                removePinFromMap(snapshot.key);
+            });
+        }
+        
+        // Add a pin to the map
+        function addPinToMap(pinId, pin) {
+            const marker = L.marker([pin.lat, pin.lng], {
+                icon: L.divIcon({
+                    className: 'lodging-pin',
+                    html: `<div style="background-color: #ff3333; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 3px rgba(0,0,0,0.5);"></div>`,
+                    iconSize: [16, 16],
+                    iconAnchor: [8, 8]
+                }),
+                riseOnHover: true // Make marker rise on hover to help with overlap
+            });
+            
+            // Create popup content
+            let popupContent = `<b>${pin.name}</b>`;
+            if (pin.notes) popupContent += `<br>${pin.notes}`;
+            if (pin.url) popupContent += `<br><a href="${pin.url}" target="_blank">More info</a>`;
+            
+            // Add a unique ID to the delete button to easily attach the event listener
+            const deleteButtonId = `delete-btn-${pinId}`;
+            popupContent += `<br><button id="${deleteButtonId}" data-pinid="${pinId}" style="margin-top: 5px; padding: 3px 8px; font-size: 10px; background-color: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer;">Delete</button>`;
+            
+            // Bind popup to marker
+            marker.bindPopup(popupContent);
+            
+            // Add marker to map and store in the layer group with the pinId as an attribute
+            marker.pinId = pinId;
+            marker.addTo(pinLayerGroup);
+            
+            // Add event listener for the delete button AFTER the popup is opened
+            marker.on('popupopen', () => {
+                const deleteButton = document.getElementById(deleteButtonId);
+                if (deleteButton) {
+                    // Use .onclick to ensure only one listener is attached
+                    deleteButton.onclick = function() {
+                        // Confirm deletion
+                        if (confirm(`Are you sure you want to delete the pin "${pin.name}"?`)) {
+                            deletePin(pinId);
+                        }
+                    };
+                }
+            });
+        }
+        
+        // Function to delete a pin from Firebase
+        function deletePin(pinId) {
+            database.ref('pins/' + pinId).remove()
+                .then(() => {
+                    console.log("Pin deleted successfully:", pinId);
+                    map.closePopup(); // Close the popup after deletion
+                })
+                .catch((error) => {
+                    console.error("Error deleting pin:", error);
+                    showError("Could not delete the pin. Please try again.");
+                });
+        }
+        
+        // Remove a pin from the map
+        function removePinFromMap(pinId) {
+            pinLayerGroup.eachLayer((layer) => {
+                if (layer.pinId === pinId) {
+                    pinLayerGroup.removeLayer(layer);
+                }
+            });
+        }
+        
+        // Show loading indicator
+        function showLoading(isLoading) {
+            loadingIndicator.style.display = isLoading ? 'block' : 'none';
+        }
+        
+        // Show error message
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            
+            // Hide error after 5 seconds
+            setTimeout(() => {
+                hideError();
+            }, 5000);
+        }
+        
+        // Hide error message
+        function hideError() {
+            errorMessage.style.display = 'none';
+        }
+        
+        // Function to adjust isochrone opacity based on zoom
+        function updateIsochroneOpacity() {
+            if (!isochroneLayer) return; // Do nothing if layer doesn't exist
+            
+            const currentZoom = map.getZoom();
+            // Example: decrease opacity as zoom increases (more zoomed in)
+            // Adjust the formula as needed for desired effect
+            const minOpacity = 0.1;
+            const maxOpacity = 0.5;
+            const zoomThresholdLow = 8; // Zoom level below which opacity is max
+            const zoomThresholdHigh = 14; // Zoom level above which opacity is min
+            
+            let opacity;
+            if (currentZoom <= zoomThresholdLow) {
+                opacity = maxOpacity;
+            } else if (currentZoom >= zoomThresholdHigh) {
+                opacity = minOpacity;
+            } else {
+                // Linear interpolation between thresholds
+                opacity = maxOpacity - (maxOpacity - minOpacity) * (currentZoom - zoomThresholdLow) / (zoomThresholdHigh - zoomThresholdLow);
+            }
+            
+            isochroneLayer.setStyle({ fillOpacity: opacity });
+        }
+        
+        // Function to log API calls to Firebase
+        function logApiCall(mode, travelTimeSeconds) { // Mode is now 'car' or 'transit'
+            try {
+                database.ref('api_logs').push({
+                    timestamp: firebase.database.ServerValue.TIMESTAMP,
+                    mode: mode, // Log Targomo mode ('car' or 'transit')
+                    travel_time_seconds: travelTimeSeconds,
+                    map_bounds: map.getBounds().toBBoxString(), // Log current map view
+                    user_agent: navigator.userAgent // Optional: log user agent
+                });
+            } catch (error) {
+                console.error("Failed to log API call to Firebase:", error);
+                // Decide if you want to show a non-critical error to the user or just log it
+            }
+        }
+        
+        // Initialize the app
+        function initApp() {
+            // Fetch initial isochrone (driving mode)
+            fetchIsochrone(currentMode);
+            
+            // Initialize Firebase pin listeners
+            initFirebasePinListeners();
+            
+            // Add listener for zoom changes to update opacity
+            map.on('zoomend', updateIsochroneOpacity);
+        }
+        
+        // Start the app when the page loads
+        window.onload = initApp;
+    </script>
+</body>
+</html>
